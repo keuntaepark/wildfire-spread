@@ -2,7 +2,7 @@
 <html lang="ko">
   <head>
     <meta charset="UTF-8" />
-    <title>산불 확산 예측 (방향성 타원형 히트맵)</title>
+    <title>산불 확산 예측</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- 로컬 Leaflet CSS -->
     <link rel="stylesheet" href="./leaflet/leaflet.css" />
@@ -113,6 +113,22 @@
       #refreshBtn:hover {
         background: #555;
       }
+      /* Legend 스타일 */
+      .legend {
+        line-height: 18px;
+        color: #555;
+      }
+      .legend i {
+        width: 18px;
+        height: 18px;
+        float: left;
+        margin-right: 8px;
+        opacity: 0.8;
+      }
+      /* 모든 셀에 그림자 효과 적용 */
+      .highProbShadow {
+        filter: drop-shadow(1px 1px 2px rgba(170, 0, 0, 0.5));
+      }
       @media screen and (max-width: 600px) {
         #map {
           height: calc(100vh - 140px);
@@ -123,22 +139,18 @@
           width: 180px;
         }
         #infoBox {
-          width: 180px;
-          bottom: 70px;
+          width: 220px;
+          bottom: 10px;
           right: 5px;
-          font-size: 10px;
+          font-size: 12px;
         }
       }
     </style>
   </head>
   <body>
     <header>
-      <h2>산불 확산 예측 (방향성 타원형 히트맵)</h2>
-      <p>
-        클릭 지점을 중심으로 반경 5km 이내 격자 셀마다, 바람 방향(풍향+180°)에
-        따라 확산 가능 거리가 달라지도록 계산하여, 확산 강도가 높을수록 빨간색,
-        낮을수록 녹색으로 표시되는 방향성 있는 열지도를 생성합니다.
-      </p>
+      <h2>산불 확산 예측</h2>
+      <p>산불 발생 지점과 바람 정보를 기준으로 번질 방향을 예측합니다.</p>
     </header>
 
     <div id="map"></div>
@@ -151,37 +163,54 @@
     </div>
 
     <div id="infoBox">
-      <h3>바람 정보</h3>
-      <div id="infoContent">- 바람 정보가 여기 표시됩니다 -</div>
+      <h3>바람 정보 및 4방위 확산률</h3>
+      <div id="infoContent"></div>
       <button id="refreshBtn" onclick="handleRefresh()">새로고침</button>
     </div>
 
+    <!-- Leaflet JS -->
     <script src="./leaflet/leaflet.js"></script>
     <script>
-      // ---------------------------
-      // [A] 기본 변수 선언 및 지도 설정
+      // [A] 지도 초기화
       const koreaBounds = L.latLngBounds([33, 124], [39.5, 132]);
       const map = L.map("map", {
         zoomControl: false,
         maxBounds: koreaBounds,
         maxBoundsViscosity: 1.0,
       }).setView([36.5, 127.5], 7);
+
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         attribution: "&copy; OpenStreetMap contributors",
       }).addTo(map);
+
       L.control.zoom({ position: "bottomleft" }).addTo(map);
+
       const spreadLayer = L.layerGroup().addTo(map);
       const infoContent = document.getElementById("infoContent");
       const addressInput = document.getElementById("addressInput");
       let currentLat = null,
         currentLon = null;
 
-      // ---------------------------
-      // [B] 8방위 확률 계산 함수 (최소 5% 부여, 제곱 감쇠 적용)
-      // 바람 정면(풍향+180°)과의 각도 차이에 따라 directionalFactor를 구하고,
-      // 그에 따른 최대 확산 거리를 1km~5km로 설정합니다.
+      // [B] 범례 컨트롤 추가 (하단 오른쪽)
+      const legend = L.control({ position: "bottomright" });
+      legend.onAdd = function () {
+        const div = L.DomUtil.create("div", "legend");
+        div.innerHTML = `
+          <b>확산 강도 (6단계)</b><br>
+          <i style="background: darkred"></i> ≥40%<br>
+          <i style="background: orangered"></i> 30~40%<br>
+          <i style="background: orange"></i> 20~30%<br>
+          <i style="background: yellow"></i> 10~20%<br>
+          <i style="background: lightyellow"></i> 5~10%<br>
+          <i style="background: whitesmoke"></i> 0~5%
+        `;
+        return div;
+      };
+      legend.addTo(map);
+
+      // [C] 8방위 확률 계산 함수 (최소 5% 부여, 제곱 감쇠)
       function calcSpreadProbCustom8(windDir) {
-        let fireSpreadDir = (windDir + 180) % 360;
+        const fireSpreadDir = (windDir + 180) % 360;
         const sectors = {
           N: 0,
           NE: 45,
@@ -211,8 +240,7 @@
         return prob;
       }
 
-      // ---------------------------
-      // [C] 8방위 선형 보간 함수 (보간을 통해 0~360° 모든 각도에 대해 확률 추정)
+      // [D] 8방위 선형 보간 함수
       function getInterpolatedProb(angle, prob8) {
         const sectors = [
           { dir: "N", angle: 0 },
@@ -238,59 +266,37 @@
         return prob8[lower.dir] * (1 - t) + prob8[upper.dir] * t;
       }
 
-      // ---------------------------
-      // [D] Smooth Noise: 10° 간격, 선형 보간 (±5% 변동)
-      const noiseInterval = 10;
-      const noiseVals = {};
-      for (let a = 0; a <= 360; a += noiseInterval) {
-        noiseVals[a] = 0.95 + Math.random() * 0.1;
-      }
-      function smoothNoise(angle) {
-        angle = angle % 360;
-        let lower = Math.floor(angle / noiseInterval) * noiseInterval;
-        let upper = lower + noiseInterval;
-        if (upper > 360) upper = 360;
-        let t = (angle - lower) / noiseInterval;
-        return noiseVals[lower] * (1 - t) + noiseVals[upper] * t;
+      // [E] 셀 확률 계산 함수
+      // 클릭 지점 → 셀 방향에 따른 8방위 보간 확률과 거리 감쇠를 적용합니다.
+      function computeCellProbability(distanceKm, cellBearing, prob8) {
+        const angleProb = getInterpolatedProb(cellBearing, prob8);
+        const maxDist = 1 + 4 * angleProb; // 1km ~ 5km
+        if (distanceKm > maxDist) return 0;
+        return angleProb * Math.pow(1 - distanceKm / maxDist, 2);
       }
 
-      // ---------------------------
-      // [E] 확산 셀 확률 계산 함수 (방향 및 거리 감쇠 적용)
-      // 바람 정면(풍향+180°)과의 각도 차이를 이용하여, 셀별 최대 확산 거리를 1km(반대) ~ 5km(정면)로 설정하고,
-      // 해당 거리 내에서 비선형 감쇠를 적용해 확산 강도를 계산합니다.
-      function computeCellProbability(distanceKm, cellBearing, fireSpreadDir) {
-        let angleDiff = Math.abs(cellBearing - fireSpreadDir);
-        if (angleDiff > 180) angleDiff = 360 - angleDiff;
-        // 방향에 따른 가중치: cos(angleDiff) 사용 – 정면(0°)이면 1, 90°이면 0, 반대(180°)이면 -1 (하지만 0으로 클램프)
-        let directionalFactor = Math.max(
-          0,
-          Math.cos((angleDiff * Math.PI) / 180)
-        );
-        // 최대 확산 거리는 1km에서 5km까지, directionalFactor에 따라 선형 보간
-        let directionalMaxDistance = 1 + directionalFactor * 4; // 1km ~ 5km
-        if (distanceKm > directionalMaxDistance) return 0;
-        // 확산 강도는 방향 가중치와, 최대 거리 대비 남은 거리의 제곱 감쇠로 계산
-        let prob =
-          directionalFactor *
-          Math.pow(1 - distanceKm / directionalMaxDistance, 2);
-        return prob;
-      }
-
-      // ---------------------------
-      // [F] 색상 보간 함수: 확률 0 → 녹색, 확률 1 → 빨강 (선형 보간)
+      // [F] 색상 보간 함수 (6단계)
       function getHeatColor(prob) {
-        let R = Math.round(255 * prob);
-        let G = Math.round(255 * (1 - prob));
-        return `rgb(${R},${G},0)`;
+        const pct = prob * 100;
+        if (pct >= 40) {
+          return "darkred";
+        } else if (pct >= 30) {
+          return "orangered";
+        } else if (pct >= 20) {
+          return "orange";
+        } else if (pct >= 10) {
+          return "yellow";
+        } else if (pct >= 5) {
+          return "lightyellow";
+        } else {
+          return "whitesmoke";
+        }
       }
 
-      // ---------------------------
-      // [G] 히트맵 생성 함수: 타원형 확산 패턴 (격자 기반)
-      // 각 셀마다 클릭 지점과의 거리를 계산한 후,
-      // 셀의 방향(중심에서의 bearing)와 바람 정면(풍향+180°)의 차이에 따라 최대 확산 거리 내에 있는지 검사하고,
-      // 그 경우에만 확산 강도(=셀 확률)를 계산하여 색상 및 투명도로 표시합니다.
+      // [G] 히트맵 생성 함수 (격자 기반, 8방위 확률 적용)
+      // 확률이 5% 이상인 셀마다, 경계선과 그림자 효과를 항상 적용합니다.
       function drawHeatmap(lat, lon, windDir) {
-        const maxDistanceKm = 5; // 전체 고려 범위
+        const maxDistanceKm = 5;
         const centerLatRad = (lat * Math.PI) / 180;
         const gridSize = 250; // 250m 격자
         const dLat = gridSize / 111000;
@@ -301,41 +307,51 @@
         const latMax = lat + latRange;
         const lonMin = lon - lonRange;
         const lonMax = lon + lonRange;
-        const fireSpreadDir = (windDir + 180) % 360;
+        // 8방위 확률 계산
+        const prob8 = calcSpreadProbCustom8(windDir);
 
         for (let cellLat = latMin; cellLat <= latMax; cellLat += dLat) {
           for (let cellLon = lonMin; cellLon <= lonMax; cellLon += dLon) {
-            let deltaLat = (cellLat - lat) * 111; // km
+            let deltaLat = (cellLat - lat) * 111;
             let deltaLon = (cellLon - lon) * 111 * Math.cos(centerLatRad);
             let distance = Math.sqrt(deltaLat * deltaLat + deltaLon * deltaLon);
             if (distance > maxDistanceKm) continue;
+
             let bearing = (Math.atan2(deltaLon, deltaLat) * 180) / Math.PI;
             if (bearing < 0) bearing += 360;
-            // computeCellProbability() 내부에서 방향별 최대 확산 거리(타원형 효과)가 적용됩니다.
-            let cellProb = computeCellProbability(
-              distance,
-              bearing,
-              fireSpreadDir
-            );
-            if (cellProb <= 0) continue;
-            let color = getHeatColor(cellProb);
-            let fillOpacity = 0.5 + 0.5 * cellProb;
+
+            const cellProb = computeCellProbability(distance, bearing, prob8);
+            if (cellProb < 0.05) continue;
+
+            const color = getHeatColor(cellProb);
+            // 모바일에서도 선명하게 보이도록 fillOpacity 조정 (0.2 ~ 0.9)
+            let fillOpacity = 0.3 + 0.7 * cellProb;
+
+            // 모든 셀에 경계선과 그림자 효과 적용 (weight: 1.5, borderColor = fillColor, className: "highProbShadow")
+            let borderWeight = 1.5;
+            let borderColor = color;
+
             let bounds = [
               [cellLat, cellLon],
               [cellLat + dLat, cellLon + dLon],
             ];
-            L.rectangle(bounds, {
-              color: color,
-              weight: 0,
+            let rect = L.rectangle(bounds, {
+              color: borderColor,
+              weight: borderWeight,
               fillColor: color,
               fillOpacity: fillOpacity,
+              className: "highProbShadow",
             }).addTo(spreadLayer);
+            // 터치/클릭 시 팝업으로 확산 강도(%) 표시
+            rect.bindPopup((cellProb * 100).toFixed(1) + "%");
+            rect.on("click", function () {
+              rect.openPopup();
+            });
           }
         }
       }
 
-      // ---------------------------
-      // [H] destinationPoint 함수: 중심에서 주어진 각도와 거리만큼 이동한 좌표 계산
+      // [H] destinationPoint 함수 (필요시 사용)
       function destinationPoint(lat, lon, bearingDeg, distanceKm) {
         const R = 6371;
         const rad = Math.PI / 180;
@@ -356,28 +372,18 @@
         return [newLat / rad, newLon / rad];
       }
 
-      // ---------------------------
-      // [I] 텍스트 출력 함수들
-      function buildFullText(lat, lon, windDir, windSpd, prob) {
-        let txt = `위도: ${lat.toFixed(4)}, 경도: ${lon.toFixed(4)}\n`;
-        txt += `풍향: ${windDir}° (불어오는 각도)\n`;
-        txt += `풍속: ${windSpd} km/h\n\n`;
-        txt += "[확산 확률]\n";
-        for (let d in prob) {
-          txt += `${d}: ${(prob[d] * 100).toFixed(1)}%\n`;
-        }
-        return txt;
-      }
-      function buildCompactText(prob) {
-        let txt = "[확산 확률]\n";
-        for (let d in prob) {
-          txt += `${d}: ${(prob[d] * 100).toFixed(1)}%\n`;
-        }
-        return txt;
+      // [I] infoBox에 4방위 확산률 정보 표시 함수 (N, E, S, W)
+      function buildWindInfoText(windDir, windSpd, prob8) {
+        const nPct = (prob8["N"] * 100).toFixed(1);
+        const ePct = (prob8["E"] * 100).toFixed(1);
+        const sPct = (prob8["S"] * 100).toFixed(1);
+        const wPct = (prob8["W"] * 100).toFixed(1);
+        return `풍향: ${windDir}° / 풍속: ${windSpd} km/h
+N: ${nPct}%, E: ${ePct}%, 
+S: ${sPct}%, W: ${wPct}%`;
       }
 
-      // ---------------------------
-      // [J] 지도 클릭 이벤트 및 기타 처리
+      // [J] 지도 클릭 이벤트
       map.on("click", (e) => {
         simulateSpread(e.latlng.lat, e.latlng.lng);
       });
@@ -385,7 +391,6 @@
         return lat >= 33 && lat <= 39.5 && lon >= 124 && lon <= 132;
       }
 
-      // ---------------------------
       // [K] 주소 검색 함수
       async function handleSearch() {
         const address = addressInput.value.trim();
@@ -417,7 +422,6 @@
         }
       }
 
-      // ---------------------------
       // [L] 현재 위치 버튼 함수
       async function handleCurrentLocation() {
         if (!navigator.geolocation) {
@@ -451,7 +455,6 @@
         );
       }
 
-      // ---------------------------
       // [M] 새로고침 버튼 함수
       function handleRefresh() {
         if (currentLat === null || currentLon === null) {
@@ -461,7 +464,6 @@
         simulateSpread(currentLat, currentLon);
       }
 
-      // ---------------------------
       // [N] 바람 데이터 조회 및 시뮬레이션 함수
       async function simulateSpread(lat, lon) {
         currentLat = lat;
@@ -484,20 +486,9 @@
           if (!data.current_weather) throw new Error("current_weather 없음");
           const windDir = data.current_weather.winddirection;
           const windSpd = data.current_weather.windspeed;
-          const prob = calcSpreadProbCustom8(windDir);
-          const isMobile = window.innerWidth < 600;
-          if (isMobile) {
-            infoContent.textContent = buildCompactText(prob);
-          } else {
-            infoContent.textContent = buildFullText(
-              lat,
-              lon,
-              windDir,
-              windSpd,
-              prob
-            );
-          }
-          // 방향성 타원형 히트맵 생성 (격자 기반)
+          const prob8 = calcSpreadProbCustom8(windDir);
+          infoContent.textContent = buildWindInfoText(windDir, windSpd, prob8);
+          // 8방위 히트맵 생성
           drawHeatmap(lat, lon, windDir);
         } catch (err) {
           console.error("시뮬레이션 오류:", err);
@@ -505,57 +496,7 @@
         }
       }
 
-      // ---------------------------
-      // [O] 히트맵 생성 함수: 타원형 확산 패턴 (격자 기반)
-      // 각 셀마다 클릭 지점과의 거리를 계산하고, 셀의 중심 방향과 바람 정면(풍향+180°)의 차이에 따라
-      // 최대 확산 거리를 결정한 후, 그 범위 내에 있는 셀만 표시합니다.
-      function drawHeatmap(lat, lon, windDir) {
-        const maxDistanceKm = 5;
-        const centerLatRad = (lat * Math.PI) / 180;
-        const gridSize = 250; // 250m 격자
-        const dLat = gridSize / 111000;
-        const dLon = gridSize / (111000 * Math.cos(centerLatRad));
-        const latRange = maxDistanceKm / 111;
-        const lonRange = maxDistanceKm / (111 * Math.cos(centerLatRad));
-        const latMin = lat - latRange;
-        const latMax = lat + latRange;
-        const lonMin = lon - lonRange;
-        const lonMax = lon + lonRange;
-        const fireSpreadDir = (windDir + 180) % 360;
-
-        for (let cellLat = latMin; cellLat <= latMax; cellLat += dLat) {
-          for (let cellLon = lonMin; cellLon <= lonMax; cellLon += dLon) {
-            let deltaLat = (cellLat - lat) * 111; // km
-            let deltaLon = (cellLon - lon) * 111 * Math.cos(centerLatRad);
-            let distance = Math.sqrt(deltaLat * deltaLat + deltaLon * deltaLon);
-            if (distance > maxDistanceKm) continue;
-            let bearing = (Math.atan2(deltaLon, deltaLat) * 180) / Math.PI;
-            if (bearing < 0) bearing += 360;
-            // computeCellProbability() 내부에서 방향별 최대 확산 거리(타원형 효과)가 적용됨.
-            let cellProb = computeCellProbability(
-              distance,
-              bearing,
-              fireSpreadDir
-            );
-            if (cellProb <= 0) continue;
-            let color = getHeatColor(cellProb);
-            let fillOpacity = 0.5 + 0.5 * cellProb;
-            let bounds = [
-              [cellLat, cellLon],
-              [cellLat + dLat, cellLon + dLon],
-            ];
-            L.rectangle(bounds, {
-              color: color,
-              weight: 0,
-              fillColor: color,
-              fillOpacity: fillOpacity,
-            }).addTo(spreadLayer);
-          }
-        }
-      }
-
-      // ---------------------------
-      // [P] destinationPoint 함수: 중심에서 주어진 각도와 거리만큼 이동한 좌표 계산
+      // [O] destinationPoint 함수 (필요시 사용)
       function destinationPoint(lat, lon, bearingDeg, distanceKm) {
         const R = 6371;
         const rad = Math.PI / 180;
@@ -576,369 +517,9 @@
         return [newLat / rad, newLon / rad];
       }
 
-      // ---------------------------
-      // [Q] 텍스트 출력 함수들
-      function buildFullText(lat, lon, windDir, windSpd, prob) {
-        let txt = `위도: ${lat.toFixed(4)}, 경도: ${lon.toFixed(4)}\n`;
-        txt += `풍향: ${windDir}° (불어오는 각도)\n`;
-        txt += `풍속: ${windSpd} km/h\n\n`;
-        txt += "[확산 확률]\n";
-        for (let d in prob) {
-          txt += `${d}: ${(prob[d] * 100).toFixed(1)}%\n`;
-        }
-        return txt;
-      }
-      function buildCompactText(prob) {
-        let txt = "[확산 확률]\n";
-        for (let d in prob) {
-          txt += `${d}: ${(prob[d] * 100).toFixed(1)}%\n`;
-        }
-        return txt;
-      }
+      // [P] 풍향 화살표 제거 (요청에 따라 호출하지 않음)
 
-      // ---------------------------
-      // [R] 지도 클릭 이벤트 및 기타 처리
-      map.on("click", (e) => {
-        simulateSpread(e.latlng.lat, e.latlng.lng);
-      });
-      function isInKorea(lat, lon) {
-        return lat >= 33 && lat <= 39.5 && lon >= 124 && lon <= 132;
-      }
-
-      // ---------------------------
-      // [S] 주소 검색 함수
-      async function handleSearch() {
-        const address = addressInput.value.trim();
-        if (!address) {
-          alert("주소를 입력하세요");
-          return;
-        }
-        try {
-          const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
-            address
-          )}`;
-          const res = await fetch(url);
-          const data = await res.json();
-          if (!data.length) {
-            alert("해당 주소를 찾을 수 없습니다.");
-            return;
-          }
-          const lat = parseFloat(data[0].lat);
-          const lon = parseFloat(data[0].lon);
-          if (!isInKorea(lat, lon)) {
-            alert("대한민국 내 주소만 검색할 수 있습니다.");
-            return;
-          }
-          map.setView([lat, lon], 13);
-          simulateSpread(lat, lon);
-        } catch (err) {
-          console.error("주소 검색 오류:", err);
-          alert("주소 검색 중 문제가 발생했습니다.");
-        }
-      }
-
-      // ---------------------------
-      // [T] 현재 위치 버튼 함수
-      async function handleCurrentLocation() {
-        if (!navigator.geolocation) {
-          alert("이 브라우저는 현재 위치를 지원하지 않습니다.");
-          return;
-        }
-        navigator.geolocation.getCurrentPosition(
-          async (pos) => {
-            const lat = pos.coords.latitude;
-            const lon = pos.coords.longitude;
-            if (!isInKorea(lat, lon)) {
-              alert("현재 위치가 대한민국 외부로 감지되었습니다.");
-              return;
-            }
-            try {
-              const revUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`;
-              const revRes = await fetch(revUrl);
-              const revData = await revRes.json();
-              addressInput.value = revData.display_name || "내 위치";
-            } catch (e) {
-              console.error("역지오코딩 실패:", e);
-              addressInput.value = "내 위치(주소 확인 실패)";
-            }
-            map.setView([lat, lon], 13);
-            simulateSpread(lat, lon);
-          },
-          (err) => {
-            console.error("Geolocation error:", err);
-            alert("현재 위치를 가져올 수 없습니다.");
-          }
-        );
-      }
-
-      // ---------------------------
-      // [U] 새로고침 버튼 함수
-      function handleRefresh() {
-        if (currentLat === null || currentLon === null) {
-          alert("아직 위치가 지정되지 않았습니다.");
-          return;
-        }
-        simulateSpread(currentLat, currentLon);
-      }
-
-      // ---------------------------
-      // [V] 바람 데이터 조회 및 시뮬레이션 함수
-      async function simulateSpread(lat, lon) {
-        currentLat = lat;
-        currentLon = lon;
-        spreadLayer.clearLayers();
-        L.marker([lat, lon]).addTo(spreadLayer);
-        try {
-          const revUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`;
-          const revRes = await fetch(revUrl);
-          const revData = await revRes.json();
-          addressInput.value = revData.display_name || "내 위치";
-        } catch (e) {
-          console.error("역지오코딩 실패:", e);
-        }
-        const apiUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`;
-        try {
-          const res = await fetch(apiUrl);
-          if (!res.ok) throw new Error("Open-Meteo API 응답 오류");
-          const data = await res.json();
-          if (!data.current_weather) throw new Error("current_weather 없음");
-          const windDir = data.current_weather.winddirection;
-          const windSpd = data.current_weather.windspeed;
-          const prob = calcSpreadProbCustom8(windDir);
-          const isMobile = window.innerWidth < 600;
-          if (isMobile) {
-            infoContent.textContent = buildCompactText(prob);
-          } else {
-            infoContent.textContent = buildFullText(
-              lat,
-              lon,
-              windDir,
-              windSpd,
-              prob
-            );
-          }
-          // 방향성 타원형 히트맵 생성 (격자 기반)
-          drawHeatmap(lat, lon, windDir);
-        } catch (err) {
-          console.error("시뮬레이션 오류:", err);
-          infoContent.textContent = "바람 정보를 불러오지 못했습니다.";
-        }
-      }
-
-      // ---------------------------
-      // [W] 히트맵 생성 함수: 타원형 확산 패턴 (격자 기반)
-      // 각 셀마다, 셀 중심과 클릭 지점의 거리와 방향에 따라 확산 강도를 계산하여,
-      // 바람 정면(풍향+180°) 방향의 최대 확산 거리는 5km, 반대는 1km로 제한합니다.
-      function drawHeatmap(lat, lon, windDir) {
-        const maxDistanceKm = 5;
-        const centerLatRad = (lat * Math.PI) / 180;
-        const gridSize = 250; // 250m 격자
-        const dLat = gridSize / 111000;
-        const dLon = gridSize / (111000 * Math.cos(centerLatRad));
-        const latRange = maxDistanceKm / 111;
-        const lonRange = maxDistanceKm / (111 * Math.cos(centerLatRad));
-        const latMin = lat - latRange;
-        const latMax = lat + latRange;
-        const lonMin = lon - lonRange;
-        const lonMax = lon + lonRange;
-        const fireSpreadDir = (windDir + 180) % 360;
-
-        for (let cellLat = latMin; cellLat <= latMax; cellLat += dLat) {
-          for (let cellLon = lonMin; cellLon <= lonMax; cellLon += dLon) {
-            let deltaLat = (cellLat - lat) * 111;
-            let deltaLon = (cellLon - lon) * 111 * Math.cos(centerLatRad);
-            let distance = Math.sqrt(deltaLat * deltaLat + deltaLon * deltaLon);
-            if (distance > maxDistanceKm) continue;
-            let bearing = (Math.atan2(deltaLon, deltaLat) * 180) / Math.PI;
-            if (bearing < 0) bearing += 360;
-            // computeCellProbability() 내부에서 방향별 최대 확산 거리(타원형 효과)가 계산됨
-            let cellProb = computeCellProbability(
-              distance,
-              bearing,
-              fireSpreadDir
-            );
-            if (cellProb <= 0) continue;
-            let color = getHeatColor(cellProb);
-            let fillOpacity = 0.5 + 0.5 * cellProb;
-            let bounds = [
-              [cellLat, cellLon],
-              [cellLat + dLat, cellLon + dLon],
-            ];
-            L.rectangle(bounds, {
-              color: color,
-              weight: 0,
-              fillColor: color,
-              fillOpacity: fillOpacity,
-            }).addTo(spreadLayer);
-          }
-        }
-      }
-
-      // ---------------------------
-      // [X] destinationPoint 함수: 중심에서 주어진 각도와 거리만큼 이동한 좌표 계산
-      function destinationPoint(lat, lon, bearingDeg, distanceKm) {
-        const R = 6371;
-        const rad = Math.PI / 180;
-        const latRad = lat * rad;
-        const lonRad = lon * rad;
-        const bearing = bearingDeg * rad;
-        const dOverR = distanceKm / R;
-        const newLat = Math.asin(
-          Math.sin(latRad) * Math.cos(dOverR) +
-            Math.cos(latRad) * Math.sin(dOverR) * Math.cos(bearing)
-        );
-        const newLon =
-          lonRad +
-          Math.atan2(
-            Math.sin(bearing) * Math.sin(dOverR) * Math.cos(latRad),
-            Math.cos(dOverR) - Math.sin(latRad) * Math.sin(newLat)
-          );
-        return [newLat / rad, newLon / rad];
-      }
-
-      // ---------------------------
-      // [Y] 텍스트 출력 함수들
-      function buildFullText(lat, lon, windDir, windSpd, prob) {
-        let txt = `위도: ${lat.toFixed(4)}, 경도: ${lon.toFixed(4)}\n`;
-        txt += `풍향: ${windDir}° (불어오는 각도)\n`;
-        txt += `풍속: ${windSpd} km/h\n\n`;
-        txt += "[확산 확률]\n";
-        for (let d in prob) {
-          txt += `${d}: ${(prob[d] * 100).toFixed(1)}%\n`;
-        }
-        return txt;
-      }
-      function buildCompactText(prob) {
-        let txt = "[확산 확률]\n";
-        for (let d in prob) {
-          txt += `${d}: ${(prob[d] * 100).toFixed(1)}%\n`;
-        }
-        return txt;
-      }
-
-      // ---------------------------
-      // [Z] 지도 클릭 이벤트 및 기타 처리
-      map.on("click", (e) => {
-        simulateSpread(e.latlng.lat, e.latlng.lng);
-      });
-      function isInKorea(lat, lon) {
-        return lat >= 33 && lat <= 39.5 && lon >= 124 && lon <= 132;
-      }
-
-      async function handleSearch() {
-        const address = addressInput.value.trim();
-        if (!address) {
-          alert("주소를 입력하세요");
-          return;
-        }
-        try {
-          const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
-            address
-          )}`;
-          const res = await fetch(url);
-          const data = await res.json();
-          if (!data.length) {
-            alert("해당 주소를 찾을 수 없습니다.");
-            return;
-          }
-          const lat = parseFloat(data[0].lat);
-          const lon = parseFloat(data[0].lon);
-          if (!isInKorea(lat, lon)) {
-            alert("대한민국 내 주소만 검색할 수 있습니다.");
-            return;
-          }
-          map.setView([lat, lon], 13);
-          simulateSpread(lat, lon);
-        } catch (err) {
-          console.error("주소 검색 오류:", err);
-          alert("주소 검색 중 문제가 발생했습니다.");
-        }
-      }
-
-      async function handleCurrentLocation() {
-        if (!navigator.geolocation) {
-          alert("이 브라우저는 현재 위치를 지원하지 않습니다.");
-          return;
-        }
-        navigator.geolocation.getCurrentPosition(
-          async (pos) => {
-            const lat = pos.coords.latitude;
-            const lon = pos.coords.longitude;
-            if (!isInKorea(lat, lon)) {
-              alert("현재 위치가 대한민국 외부로 감지되었습니다.");
-              return;
-            }
-            try {
-              const revUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`;
-              const revRes = await fetch(revUrl);
-              const revData = await revRes.json();
-              addressInput.value = revData.display_name || "내 위치";
-            } catch (e) {
-              console.error("역지오코딩 실패:", e);
-              addressInput.value = "내 위치(주소 확인 실패)";
-            }
-            map.setView([lat, lon], 13);
-            simulateSpread(lat, lon);
-          },
-          (err) => {
-            console.error("Geolocation error:", err);
-            alert("현재 위치를 가져올 수 없습니다.");
-          }
-        );
-      }
-
-      function handleRefresh() {
-        if (currentLat === null || currentLon === null) {
-          alert("아직 위치가 지정되지 않았습니다.");
-          return;
-        }
-        simulateSpread(currentLat, currentLon);
-      }
-
-      async function simulateSpread(lat, lon) {
-        currentLat = lat;
-        currentLon = lon;
-        spreadLayer.clearLayers();
-        L.marker([lat, lon]).addTo(spreadLayer);
-        try {
-          const revUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`;
-          const revRes = await fetch(revUrl);
-          const revData = await revRes.json();
-          addressInput.value = revData.display_name || "내 위치";
-        } catch (e) {
-          console.error("역지오코딩 실패:", e);
-        }
-        const apiUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`;
-        try {
-          const res = await fetch(apiUrl);
-          if (!res.ok) throw new Error("Open-Meteo API 응답 오류");
-          const data = await res.json();
-          if (!data.current_weather) throw new Error("current_weather 없음");
-          const windDir = data.current_weather.winddirection;
-          const windSpd = data.current_weather.windspeed;
-          const prob = calcSpreadProbCustom8(windDir);
-          const isMobile = window.innerWidth < 600;
-          if (isMobile) {
-            infoContent.textContent = buildCompactText(prob);
-          } else {
-            infoContent.textContent = buildFullText(
-              lat,
-              lon,
-              windDir,
-              windSpd,
-              prob
-            );
-          }
-          // 방향성 타원형 히트맵 생성 (격자 기반)
-          drawHeatmap(lat, lon, windDir);
-        } catch (err) {
-          console.error("시뮬레이션 오류:", err);
-          infoContent.textContent = "바람 정보를 불러오지 못했습니다.";
-        }
-      }
-
-      // ---------------------------
-      // [X] 페이지 로드 시 현재 위치로 시작
+      // [Q] 페이지 로드 시 현재 위치로 시작
       window.onload = function () {
         handleCurrentLocation();
       };
