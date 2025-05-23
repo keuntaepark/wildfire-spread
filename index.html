@@ -171,6 +171,14 @@
     <!-- Leaflet JS -->
     <script src="./leaflet/leaflet.js"></script>
     <script>
+      let modelPredictions = [];
+
+      fetch("./predicted_spread.json")
+        .then((res) => res.json())
+        .then((data) => {
+          modelPredictions = data;
+          console.log("✅ Model predictions loaded:", modelPredictions.length);
+        });
       // [A] 지도 초기화
       const koreaBounds = L.latLngBounds([33, 124], [39.5, 132]);
       const map = L.map("map", {
@@ -196,14 +204,14 @@
       legend.onAdd = function () {
         const div = L.DomUtil.create("div", "legend");
         div.innerHTML = `
-          <b>확산 강도 (6단계)</b><br>
-          <i style="background: darkred"></i> ≥40%<br>
-          <i style="background: orangered"></i> 30~40%<br>
-          <i style="background: orange"></i> 20~30%<br>
-          <i style="background: yellow"></i> 10~20%<br>
-          <i style="background: lightyellow"></i> 5~10%<br>
-          <i style="background: whitesmoke"></i> 0~5%
-        `;
+                <b>확산 강도 (6단계)</b><br>
+                <i style="background: darkred"></i> ≥40%<br>
+                <i style="background: orangered"></i> 30~40%<br>
+                <i style="background: orange"></i> 20~30%<br>
+                <i style="background: yellow"></i> 10~20%<br>
+                <i style="background: lightyellow"></i> 5~10%<br>
+                <i style="background: whitesmoke"></i> 0~5%
+              `;
         return div;
       };
       legend.addTo(map);
@@ -379,8 +387,8 @@
         const sPct = (prob8["S"] * 100).toFixed(1);
         const wPct = (prob8["W"] * 100).toFixed(1);
         return `풍향: ${windDir}° / 풍속: ${windSpd} km/h
-N: ${nPct}%, E: ${ePct}%, 
-S: ${sPct}%, W: ${wPct}%`;
+      N: ${nPct}%, E: ${ePct}%,
+      S: ${sPct}%, W: ${wPct}%`;
       }
 
       // [J] 지도 클릭 이벤트
@@ -484,12 +492,29 @@ S: ${sPct}%, W: ${wPct}%`;
           if (!res.ok) throw new Error("Open-Meteo API 응답 오류");
           const data = await res.json();
           if (!data.current_weather) throw new Error("current_weather 없음");
+
           const windDir = data.current_weather.winddirection;
           const windSpd = data.current_weather.windspeed;
-          const prob8 = calcSpreadProbCustom8(windDir);
+          const probFromWind = calcSpreadProbCustom8(windDir);
+
+          // 🔍 가장 가까운 예측 위치 찾기
+          let closest = null;
+          let minDist = Infinity;
+          for (const entry of modelPredictions) {
+            const dLat = entry.lat - lat;
+            const dLon = entry.lon - lon;
+            const dist = dLat * dLat + dLon * dLon;
+            if (dist < minDist) {
+              minDist = dist;
+              closest = entry;
+            }
+          }
+
+          const probFromModel = closest ? closest.predicted_prob : probFromWind;
+          const prob8 = blendSpreadProb(probFromWind, probFromModel, 0.7);
+
           infoContent.textContent = buildWindInfoText(windDir, windSpd, prob8);
-          // 8방위 히트맵 생성
-          drawHeatmap(lat, lon, windDir);
+          drawHeatmap(lat, lon, windDir, prob8);
         } catch (err) {
           console.error("시뮬레이션 오류:", err);
           infoContent.textContent = "바람 정보를 불러오지 못했습니다.";
@@ -523,6 +548,14 @@ S: ${sPct}%, W: ${wPct}%`;
       window.onload = function () {
         handleCurrentLocation();
       };
+
+      function blendSpreadProb(W, M, alpha = 0.7) {
+        const blended = {};
+        for (const dir of Object.keys(W)) {
+          blended[dir] = alpha * W[dir] + (1 - alpha) * M[dir];
+        }
+        return blended;
+      }
     </script>
   </body>
 </html>
