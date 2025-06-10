@@ -145,9 +145,24 @@
           font-size: 12px;
         }
       }
+      #loadingIndicator {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(255, 255, 255, 0.8);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        font-size: 1.2em;
+        z-index: 10000;
+        color: #333;
+      }
     </style>
   </head>
   <body>
+    <div id="loadingIndicator">데이터 로딩 중...</div>
     <header>
       <h2>산불 확산 예측</h2>
       <p>산불 발생 지점과 바람 정보를 기준으로 번질 방향을 예측합니다.</p>
@@ -178,6 +193,7 @@
         .then((data) => {
           modelPredictions = data;
           console.log("✅ Model predictions loaded:", modelPredictions.length);
+          loadingIndicator.style.display = "none"; 
         });
       // [A] 지도 초기화
       const koreaBounds = L.latLngBounds([33, 124], [39.5, 132]);
@@ -303,7 +319,7 @@
 
       // [G] 히트맵 생성 함수 (격자 기반, 8방위 확률 적용)
       // 확률이 5% 이상인 셀마다, 경계선과 그림자 효과를 항상 적용합니다.
-      function drawHeatmap(lat, lon, windDir) {
+      function drawHeatmap(lat, lon, prob8) {
         const maxDistanceKm = 5;
         const centerLatRad = (lat * Math.PI) / 180;
         const gridSize = 250; // 250m 격자
@@ -315,8 +331,6 @@
         const latMax = lat + latRange;
         const lonMin = lon - lonRange;
         const lonMax = lon + lonRange;
-        // 8방위 확률 계산
-        const prob8 = calcSpreadProbCustom8(windDir);
 
         for (let cellLat = latMin; cellLat <= latMax; cellLat += dLat) {
           for (let cellLon = lonMin; cellLon <= lonMax; cellLon += dLon) {
@@ -391,6 +405,49 @@
       S: ${sPct}%, W: ${wPct}%`;
       }
 
+      // [NEW] 4개의 최근접 지점을 이용한 보간 함수 (Inverse Distance Weighting)
+      function interpolateProb(lat, lon) {
+        // 1. 각 데이터 지점까지의 거리를 계산합니다.
+        const distances = modelPredictions.map(item => {
+            const dist = Math.sqrt(Math.pow(lat - item.lat, 2) + Math.pow(lon - item.lon, 2));
+            return { ...item, distance: dist };
+        });
+
+        // 2. 만약 클릭한 지점이 데이터 지점과 정확히 일치하면, 해당 지점의 값을 바로 반환합니다.
+        const exactMatch = distances.find(item => item.distance === 0);
+        if (exactMatch) {
+            return exactMatch.predicted_prob;
+        }
+
+        // 3. 거리가 가까운 순으로 정렬하여 상위 4개를 선택합니다.
+        distances.sort((a, b) => a.distance - b.distance);
+        const nearestNeighbors = distances.slice(0, 4);
+
+        // 4. 역거리 가중법(IDW)을 사용하여 8방향 확률을 각각 보간합니다.
+        const interpolatedProbs = {};
+        const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+        let totalWeight = 0;
+
+        // 가중치의 합계를 먼저 계산합니다. (가중치 = 1 / 거리)
+        nearestNeighbors.forEach(neighbor => {
+            // 거리가 0에 매우 가까운 경우 무한대가 되는 것을 방지하기 위해 작은 값을 더합니다.
+            totalWeight += 1 / (neighbor.distance + 0.00001);
+        });
+
+        if (totalWeight === 0) return null; // 예외 처리
+
+        directions.forEach(dir => {
+            let weightedSum = 0;
+            nearestNeighbors.forEach(neighbor => {
+                const weight = (1 / (neighbor.distance + 0.00001)) / totalWeight;
+                weightedSum += neighbor.predicted_prob[dir] * weight;
+            });
+            interpolatedProbs[dir] = weightedSum;
+        });
+
+        return interpolatedProbs;
+      }
+
       // [J] 지도 클릭 이벤트
       map.on("click", (e) => {
         simulateSpread(e.latlng.lat, e.latlng.lng);
@@ -407,17 +464,26 @@
           return;
         }
         try {
+          // 현재 지도 경계를 가져와 검색 우선순위 지역으로 활용
+          const bounds = map.getBounds();
+          const viewbox = `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`;
+
+          // viewbox와 countrycodes 옵션을 추가하여 검색 정확도 향상
           const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
             address
-          )}`;
+          )}&countrycodes=kr&viewbox=${viewbox}&bounded=1`;
+          
           const res = await fetch(url);
           const data = await res.json();
+
           if (!data.length) {
-            alert("해당 주소를 찾을 수 없습니다.");
+            alert("해당 주소를 찾을 수 없습니다. 좀 더 상세한 주소를 입력해 보세요.");
             return;
           }
           const lat = parseFloat(data[0].lat);
           const lon = parseFloat(data[0].lon);
+          
+          // isinKorea 체크는 countrycodes=kr 로 대체 가능하지만, 만약을 위해 유지
           if (!isInKorea(lat, lon)) {
             alert("대한민국 내 주소만 검색할 수 있습니다.");
             return;
@@ -474,50 +540,48 @@
 
       // [N] 바람 데이터 조회 및 시뮬레이션 함수
       async function simulateSpread(lat, lon) {
+        // ▼▼▼ 로딩 화면 보이기 ▼▼▼
+        loadingIndicator.textContent = "분석 중...";
+        loadingIndicator.style.display = "flex";
+
         currentLat = lat;
         currentLon = lon;
         spreadLayer.clearLayers();
         L.marker([lat, lon]).addTo(spreadLayer);
+        
         try {
-          const revUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`;
-          const revRes = await fetch(revUrl);
-          const revData = await revRes.json();
-          addressInput.value = revData.display_name || "내 위치";
+            const revUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`;
+            const revRes = await fetch(revUrl);
+            const revData = await revRes.json();
+            addressInput.value = revData.display_name || "내 위치";
         } catch (e) {
-          console.error("역지오코딩 실패:", e);
+            console.error("역지오코딩 실패:", e);
         }
+        
         const apiUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`;
+        
         try {
-          const res = await fetch(apiUrl);
-          if (!res.ok) throw new Error("Open-Meteo API 응답 오류");
-          const data = await res.json();
-          if (!data.current_weather) throw new Error("current_weather 없음");
+            const res = await fetch(apiUrl);
+            if (!res.ok) throw new Error("Open-Meteo API 응답 오류");
+            const data = await res.json();
+            if (!data.current_weather) throw new Error("current_weather 없음");
 
-          const windDir = data.current_weather.winddirection;
-          const windSpd = data.current_weather.windspeed;
-          const probFromWind = calcSpreadProbCustom8(windDir);
+            const windDir = data.current_weather.winddirection;
+            const windSpd = data.current_weather.windspeed;
+            const probFromWind = calcSpreadProbCustom8(windDir);
+            const probFromModel = interpolateProb(lat, lon);
+            const prob8 = probFromModel
+                ? blendSpreadProb(probFromWind, probFromModel, 0.7)
+                : probFromWind;
 
-          // 🔍 가장 가까운 예측 위치 찾기
-          let closest = null;
-          let minDist = Infinity;
-          for (const entry of modelPredictions) {
-            const dLat = entry.lat - lat;
-            const dLon = entry.lon - lon;
-            const dist = dLat * dLat + dLon * dLon;
-            if (dist < minDist) {
-              minDist = dist;
-              closest = entry;
-            }
-          }
-
-          const probFromModel = closest ? closest.predicted_prob : probFromWind;
-          const prob8 = blendSpreadProb(probFromWind, probFromModel, 0.7);
-
-          infoContent.textContent = buildWindInfoText(windDir, windSpd, prob8);
-          drawHeatmap(lat, lon, windDir, prob8);
+            infoContent.textContent = buildWindInfoText(windDir, windSpd, prob8);
+            drawHeatmap(lat, lon, prob8);
         } catch (err) {
-          console.error("시뮬레이션 오류:", err);
-          infoContent.textContent = "바람 정보를 불러오지 못했습니다.";
+            console.error("시뮬레이션 오류:", err);
+            infoContent.textContent = "바람 정보를 불러오지 못했습니다.";
+        } finally {
+            // ▼▼▼ 로딩 화면 숨기기 ▼▼▼
+            loadingIndicator.style.display = "none";
         }
       }
 
