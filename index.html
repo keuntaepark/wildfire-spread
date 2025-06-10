@@ -225,14 +225,15 @@
       /* 범례 스타일 (좌측 하단 고정) */
       .legend-container {
         position: fixed;
-        bottom: 100px; /* 바텀시트 위에 위치 */
+        /* bottom 값은 JS에서 동적으로 설정 */
         left: 12px;
         z-index: 1001;
         background-color: rgba(255, 255, 255, 0.8);
         border-radius: 5px;
         box-shadow: 0 2px 8px var(--shadow-color);
         overflow: hidden; /* 내용이 숨겨질 때 깔끔하게 처리 */
-        transition: all 0.3s ease-in-out;
+        /* bottom 값 변화에 애니메이션 추가 */
+        transition: bottom 0.4s cubic-bezier(0.32, 0.72, 0, 1); /* transform 대신 bottom 애니메이션 */
       }
       .legend-container.minimized {
         max-height: 40px; /* 제목과 버튼만 보이도록 */
@@ -337,7 +338,7 @@
         >
           <span class="sr-only">다크 모드 활성화</span>
           <span
-            class="inline-block w-4 h-4 bg-white rounded-full toggle-switch-handle transform translate-x-1"
+            class="inline-block w-4 h-4 bg-white rounded-full toggle-switch-handle"
           ></span>
         </button>
       </div>
@@ -545,6 +546,45 @@
           : "▲";
       }
 
+      // --- 범례 위치 동기화 함수 (바텀 시트 움직임에 따라) ---
+      // MutationObserver를 사용하여 bottomSheet의 'class' (is-open 토글 감지) 속성 변화를 감지
+      const bottomSheetObserver = new MutationObserver((mutations) => {
+        mutations.forEach((mutation) => {
+          if (
+            mutation.type === "attributes" &&
+            mutation.attributeName === "class"
+          ) {
+            // bottomSheet의 is-open 클래스 변화에 따라 범례 위치 업데이트
+            updateLegendPosition();
+          }
+        });
+      });
+
+      // bottomSheet의 class 속성 변화를 관찰하도록 설정
+      bottomSheetObserver.observe(bottomSheet, {
+        attributes: true,
+        attributeFilter: ["class"],
+      });
+
+      function updateLegendPosition() {
+        // 바텀 시트의 현재 렌더링된 높이를 가져옵니다.
+        const bottomSheetRect = bottomSheet.getBoundingClientRect();
+        let bottomSheetCurrentVisibleHeight; // 현재 화면에 보이는 바텀 시트의 높이
+
+        if (bottomSheet.classList.contains("is-open")) {
+          // 바텀 시트가 열려 있을 때: 실제 높이가 모두 보입니다.
+          bottomSheetCurrentVisibleHeight = bottomSheetRect.height;
+        } else {
+          // 바텀 시트가 닫혀 있을 때: CSS에서 정의된 최소 높이 (90px)만큼만 보입니다.
+          bottomSheetCurrentVisibleHeight = 90;
+        }
+
+        // 범례는 바텀 시트의 현재 보이는 높이 + 여백(12px) 만큼 위로 올라와야 합니다.
+        const newBottom = bottomSheetCurrentVisibleHeight + 12;
+
+        legendContainer.style.bottom = `${newBottom}px`;
+      }
+
       // --- 지도 초기화 및 설정 ---
       const koreaBounds = L.latLngBounds([33, 124], [39.5, 132]);
       const map = L.map("map", {
@@ -569,23 +609,6 @@
 
       // 확산 히트맵 레이어 그룹
       const spreadLayer = L.layerGroup().addTo(map);
-
-      // Leaflet 범례는 이제 HTML 요소로 직접 관리되므로 L.control은 제거
-      // const legend = L.control({ position: "bottomleft" });
-      // legend.onAdd = function () {
-      //   const div = L.DomUtil.create("div", "legend");
-      //   div.innerHTML = `
-      //     <b>확산 강도 (6단계)</b><br>
-      //     <i style="background: darkred"></i> ≥40%<br>
-      //     <i style="background: orangered"></i> 30~40%<br>
-      //     <i style="background: orange"></i> 20~30%<br>
-      //     <i style="background: yellow"></i> 10~20%<br>
-      //     <i style="background: lightyellow"></i> 5~10%<br>
-      //     <i style="background: whitesmoke"></i> 0~5%
-      //   `;
-      //   return div;
-      // };
-      // legend.addTo(map); // Leaflet 컨트롤러는 제거
 
       // --- 확산 예측 관련 핵심 함수들 ---
 
@@ -636,6 +659,7 @@
         ];
         let lower, upper;
         for (let i = 0; i < sectors.length - 1; i++) {
+          // 'secs' 변수 이름을 'sectors'로 수정
           if (angle >= sectors[i].angle && angle <= sectors[i + 1].angle) {
             lower = sectors[i];
             upper = sectors[i + 1];
@@ -789,7 +813,7 @@
         const exactMatch = distances.find((item) => item.distance === 0);
         if (exactMatch) return exactMatch.predicted_prob;
         // 3. 거리가 가까운 순으로 정렬하여 상위 4개를 선택합니다.
-        distances.sort((a, b) => a.distance - b.d); // 정렬 기준을 item.d에서 item.distance로 변경
+        distances.sort((a, b) => a.distance - b.distance); // 정렬 기준을 item.distance로 수정
         const nearestNeighbors = distances.slice(0, 4);
         // 4. 역거리 가중법(IDW)을 사용하여 8방향 확률을 각각 보간합니다.
         const interpolatedProbs = {};
@@ -972,6 +996,7 @@
       // window.onload: 페이지의 모든 콘텐츠(HTML, CSS, 이미지 등)가 로드된 후 실행
       window.onload = function () {
         applyTheme(); // 페이지 로드 시 테마 적용 (토글 위치 초기화 포함)
+        updateLegendPosition(); // 페이지 로드 시 범례 초기 위치 설정
 
         // predicted_spread.json 파일 로드
         fetch("./predicted_spread.json")
