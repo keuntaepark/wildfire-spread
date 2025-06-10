@@ -2,11 +2,39 @@
 <html lang="ko">
   <head>
     <meta charset="UTF-8" />
-    <title>산불 확산 예측</title>
+    <title>Firecompass(선견)</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- 로컬 Leaflet CSS -->
     <link rel="stylesheet" href="./leaflet/leaflet.css" />
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
+      :root {
+        --bg-color: #ffffff;
+        --text-color: #1f2937;
+        --subtext-color: #6b7280;
+        --border-color: #e5e7eb;
+        --panel-bg-color: #ffffff;
+        --panel-bg-sub-color: #f3f4f6;
+        --shadow-color: rgba(0, 0, 0, 0.15); /* 그림자 색상 미세 조정 */
+        --fire-orange: #ff6b6b; /* 주황색 톤 정의 */
+        --fire-orange-hover: #ff4c4c;
+        --highlight-color: #ef4444; /* 강조 색상 (빨간색) */
+        --highlight-color-dark: #f87171; /* 강조 색상 다크모드 */
+      }
+
+      html.dark {
+        --bg-color: #111827;
+        --text-color: #f9fafb;
+        --subtext-color: #9ca3af;
+        --border-color: #374151;
+        --panel-bg-color: #1f2937;
+        --panel-bg-sub-color: #374151;
+        --shadow-color: rgba(0, 0, 0, 0.6);
+        --fire-orange: #f97316; /* 다크모드 주황색 */
+        --fire-orange-hover: #ea580c;
+        --highlight-color: #dc2626; /* 강조 색상 (빨간색) 다크모드 */
+        --highlight-color-dark: #f87171; /* 강조 색상 다크모드 */
+      }
+
       * {
         margin: 0;
         padding: 0;
@@ -14,137 +42,187 @@
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
           sans-serif;
       }
-      body {
-        background-color: #f4f4f4;
-        color: #333;
+      body,
+      html {
+        overscroll-behavior-y: contain;
+        height: 100%;
+        width: 100%;
+        overflow: hidden;
+        background-color: var(--bg-color);
+        color: var(--text-color);
       }
+      /* 기존 헤더 숨김 */
       header {
-        background: #fff;
-        padding: 8px 16px;
-        border-bottom: 1px solid #ccc;
-        position: relative;
-      }
-      header h2 {
-        font-size: 18px;
-        margin: 0;
-      }
-      header p {
-        font-size: 13px;
-        margin: 4px 0 0;
-        color: #666;
+        display: none;
       }
       #map {
         width: 100%;
-        height: calc(100vh - 90px);
+        height: 100%;
+        background-color: #e5e5e5;
       }
-      #searchBox {
-        position: absolute;
-        top: 70px;
-        left: 10px;
-        z-index: 9999;
-        width: 220px;
-        background: #fff;
-        border-radius: 6px;
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
-        padding: 8px;
-        border: 1px solid #eee;
+      /* 다크모드일 때 지도 타일 어둡게 */
+      .dark .leaflet-tile-pane {
+        filter: brightness(0.6) invert(1) contrast(3) hue-rotate(200deg)
+          saturate(0.3) brightness(0.7);
       }
-      #searchBox label {
-        font-size: 14px;
+
+      /* 메인 툴바 스타일 (상단 고정) */
+      #mainToolbar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 1002; /* 범례 및 바텀시트보다 높게 */
+        background-color: var(--panel-bg-color);
+        box-shadow: 0 2px 8px var(--shadow-color);
+        padding: 12px 16px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid var(--border-color);
+      }
+      #mainToolbar h1 {
+        font-size: 1.125rem; /* text-lg */
+        font-weight: 700; /* font-bold */
+        color: var(--text-color);
+      }
+      /* 다크모드 토글 버튼 배경색 제어 */
+      #darkModeToggle.dark-mode-active {
+        background-color: var(--subtext-color); /* 다크모드일 때 버튼 배경색 */
+      }
+
+      /* 바텀 시트 스타일 */
+      .bottom-sheet {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        z-index: 1000;
+        height: auto; /* 내용에 따라 높이 조절 */
+        max-height: 85vh;
+        display: flex;
+        flex-direction: column;
+        background-color: var(--panel-bg-color);
+        box-shadow: 0 -10px 30px -5px var(--shadow-color);
+        border-top-left-radius: 1rem; /* rounded-t-2xl */
+        border-top-right-radius: 1rem; /* rounded-t-2xl */
+        transition: transform 0.4s cubic-bezier(0.32, 0.72, 0, 1);
+        transform: translateY(
+          calc(100% - 90px)
+        ); /* 기본적으로 90px만 보이도록 설정 */
+      }
+      .bottom-sheet.is-open {
+        transform: translateY(0); /* 완전히 열림 */
+      }
+      /* 모바일 환경에서는 여전히 작게 시작하도록 유지 (추가된 미디어 쿼리) */
+      @media screen and (max-width: 768px) {
+        .bottom-sheet {
+          transform: translateY(calc(100% - 90px));
+        }
+      }
+
+      /* 예측 결과 패널 스타일 (우측 상단 고정) */
+      #predictionPanel {
+        position: fixed;
+        top: 60px; /* 툴바 높이 고려 */
+        right: 12px;
+        z-index: 1001; /* 툴바 아래, 범례 위 */
+        background-color: var(--panel-bg-color);
+        border-radius: 0.5rem; /* rounded-lg */
+        box-shadow: 0 4px 12px var(--shadow-color);
+        padding: 12px;
+        max-width: 250px;
+        font-size: 0.875rem; /* text-sm */
+        border: 1px solid var(--border-color);
+      }
+      #predictionPanel h3 {
+        font-weight: 700; /* font-bold */
+        font-size: 0.9375rem; /* text-base */
+        margin-bottom: 0.5rem;
+        color: var(--text-color);
+      }
+      #predictionPanel .info-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 0.25rem;
+      }
+      #predictionPanel .info-label {
+        color: var(--subtext-color);
+      }
+      #predictionPanel .info-value {
         font-weight: 600;
-        margin-bottom: 6px;
-        display: block;
+        color: var(--text-color);
       }
-      #searchBox input {
-        width: 100%;
-        padding: 6px;
-        font-size: 14px;
-        margin-bottom: 8px;
-        border: 1px solid #ccc;
-        border-radius: 4px;
-      }
-      #searchBox button {
-        width: 100%;
-        padding: 8px;
-        margin-bottom: 6px;
-        font-size: 14px;
-        border: none;
-        border-radius: 4px;
-        cursor: pointer;
-        background: #ff6b6b;
-        color: #fff;
-      }
-      #searchBox button:hover {
-        background: #ff4c4c;
-      }
-      #infoBox {
-        position: absolute;
-        bottom: 10px;
-        right: 10px;
-        z-index: 9999;
-        width: 200px;
-        background: #fff;
-        border-radius: 6px;
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
-        padding: 8px;
-        border: 1px solid #eee;
-        font-size: 13px;
-        line-height: 1.3;
-        white-space: pre-wrap;
-      }
-      #infoBox h3 {
-        margin-bottom: 4px;
-        font-size: 14px;
-        font-weight: 600;
-      }
-      #refreshBtn {
-        display: block;
-        width: 100%;
-        margin-top: 8px;
-        padding: 6px;
-        font-size: 12px;
-        border: none;
-        border-radius: 4px;
-        cursor: pointer;
-        background: #777;
-        color: #fff;
+      #predictionPanel .direction-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 0.5rem;
         text-align: center;
+        margin-top: 0.75rem;
+        padding-top: 0.75rem;
+        border-top: 1px solid var(--border-color);
       }
-      #refreshBtn:hover {
-        background: #555;
+      #predictionPanel .direction-item p {
+        font-weight: 700;
       }
-      /* Legend 스타일 */
+      #predictionPanel .direction-item .percentage {
+        font-size: 0.75rem; /* text-xs */
+        color: var(--subtext-color);
+      }
+      /* 바람 방향별 아이콘 (CSS에서 회전) */
+      #predictionPanel .wind-arrow {
+        display: inline-block;
+        width: 1em;
+        height: 1em;
+        vertical-align: middle;
+        margin-left: 0.25em;
+        font-weight: bold; /* 화살표 굵기 */
+        transform-origin: center center;
+        transition: transform 0.3s ease-out;
+      }
+      /* Top 2 강조 색상 */
+      #predictionPanel .percentage.highlight {
+        color: var(--highlight-color);
+        font-weight: bold;
+      }
+      /* 다크모드일 때 Top 2 강조 색상 */
+      html.dark #predictionPanel .percentage.highlight {
+        color: var(--highlight-color-dark);
+      }
+
+      /* 범례 스타일 (좌측 하단 고정) */
       .legend {
         line-height: 18px;
-        color: #555;
+        color: var(--subtext-color);
+        background-color: rgba(255, 255, 255, 0.8);
+        padding: 6px 8px;
+        border-radius: 5px;
+        z-index: 1001; /* 바텀 시트보다 높게 */
+        position: fixed; /* Leaflet 컨트롤은 이미 position:absolute지만 명시적으로 */
+        bottom: 100px; /* 바텀시트 위에 위치 */
+        left: 12px;
+        right: auto;
+        top: auto;
+        box-shadow: 0 2px 8px var(--shadow-color);
+      }
+      .dark .legend {
+        background-color: rgba(0, 0, 0, 0.7);
+        color: #ccc;
       }
       .legend i {
         width: 18px;
         height: 18px;
         float: left;
         margin-right: 8px;
-        opacity: 0.8;
+        opacity: 0.9;
+        border: 1px solid #ccc;
       }
-      /* 모든 셀에 그림자 효과 적용 */
+      /* 히트맵 그림자 효과 */
       .highProbShadow {
         filter: drop-shadow(1px 1px 2px rgba(170, 0, 0, 0.5));
       }
-      @media screen and (max-width: 600px) {
-        #map {
-          height: calc(100vh - 140px);
-        }
-        #searchBox {
-          top: 100px;
-          left: 5px;
-          width: 180px;
-        }
-        #infoBox {
-          width: 220px;
-          bottom: 10px;
-          right: 5px;
-          font-size: 12px;
-        }
-      }
+      /* 로딩 인디케이터 */
       #loadingIndicator {
         position: fixed;
         top: 0;
@@ -152,89 +230,259 @@
         width: 100%;
         height: 100%;
         background: rgba(255, 255, 255, 0.8);
-        display: flex;
+        display: none;
         justify-content: center;
         align-items: center;
         font-size: 1.2em;
-        z-index: 10000;
+        z-index: 10001;
         color: #333;
+      }
+      html.dark #loadingIndicator {
+        background: rgba(0, 0, 0, 0.7);
+        color: #fff;
+      }
+
+      /* 검색 버튼 및 현재 위치 버튼 색상 */
+      #searchBox button {
+        background: var(--fire-orange);
+      }
+      #searchBox button:hover {
+        background: var(--fire-orange-hover);
       }
     </style>
   </head>
   <body>
     <div id="loadingIndicator">데이터 로딩 중...</div>
-    <header>
-      <h2>산불 확산 예측</h2>
-      <p>산불 발생 지점과 바람 정보를 기준으로 번질 방향을 예측합니다.</p>
-    </header>
-
     <div id="map"></div>
 
-    <div id="searchBox">
-      <label for="addressInput">주소 검색</label>
-      <input type="text" id="addressInput" placeholder="예) 서울역" />
-      <button onclick="handleSearch()">검색</button>
-      <button onclick="handleCurrentLocation()">현재 위치</button>
+    <div id="mainToolbar">
+      <h1>Firecompass(선견) - 산불 확산 예측</h1>
+      <div class="flex items-center space-x-2">
+        <label
+          for="darkModeToggle"
+          class="text-sm font-medium text-gray-700 dark:text-gray-300 sr-only"
+          >다크 모드</label
+        >
+        <button
+          id="darkModeToggle"
+          class="relative inline-flex items-center h-6 rounded-full w-11 transition-colors duration-300 ease-in-out bg-gray-200"
+        >
+          <span class="sr-only">다크 모드 활성화</span>
+          <span
+            class="inline-block w-4 h-4 bg-white rounded-full toggle-switch-handle"
+          ></span>
+        </button>
+      </div>
     </div>
 
-    <div id="infoBox">
-      <h3>바람 정보 및 4방위 확산률</h3>
+    <div
+      id="bottomSheet"
+      class="bottom-sheet flex flex-col bg-white dark:bg-gray-800 shadow-t-2xl rounded-t-2xl"
+    >
+      <div
+        id="sheetHeader"
+        class="w-full py-3 text-center cursor-pointer flex-shrink-0 border-b border-gray-200 dark:border-gray-700"
+      >
+        <div
+          class="w-10 h-1.5 bg-gray-300 dark:bg-gray-600 rounded-full mx-auto"
+        ></div>
+        <h2 class="text-base font-bold text-gray-800 dark:text-gray-100 mt-2">
+          발화 지점 선택
+        </h2>
+      </div>
+      <div class="flex-grow p-4 overflow-y-auto">
+        <div class="space-y-3">
+          <label
+            for="addressInput"
+            class="font-bold text-gray-700 dark:text-gray-200 sr-only"
+            >주소 검색</label
+          >
+          <div class="relative">
+            <input
+              type="text"
+              id="addressInput"
+              placeholder="주소 또는 장소 검색 (예: 서울역)"
+              class="w-full pl-10 pr-4 py-3 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent transition"
+            />
+            <div class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+              <svg
+                class="w-5 h-5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                ></path>
+              </svg>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <button
+              onclick="handleCurrentLocation()"
+              class="w-full flex items-center justify-center gap-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-100 font-bold py-3 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition"
+            >
+              <svg
+                class="w-5 h-5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
+                ></path>
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
+                ></path>
+              </svg>
+              <span>현재 위치</span>
+            </button>
+            <button
+              onclick="handleSearch()"
+              class="w-full flex items-center justify-center gap-2 bg-orange-500 text-white font-bold py-3 rounded-lg hover:bg-orange-600 transition"
+            >
+              <svg
+                class="w-5 h-5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M9 13l3-3m0 0l3 3m-3-3v8m0-13a9 9 0 110 18 9 9 0 010-18z"
+                ></path>
+              </svg>
+              <span>검색 및 예측</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="predictionPanel" class="hidden">
+      <h3>예측 결과 요약</h3>
       <div id="infoContent"></div>
-      <button id="refreshBtn" onclick="handleRefresh()">새로고침</button>
     </div>
 
-    <!-- Leaflet JS -->
     <script src="./leaflet/leaflet.js"></script>
     <script>
       let modelPredictions = [];
+      let currentLat = null,
+        currentLon = null;
 
-      fetch("./predicted_spread.json")
-        .then((res) => res.json())
-        .then((data) => {
-          modelPredictions = data;
-          console.log("✅ Model predictions loaded:", modelPredictions.length);
-          loadingIndicator.style.display = "none"; 
-        });
-      // [A] 지도 초기화
+      // --- DOM 요소 가져오기 ---
+      const bottomSheet = document.getElementById("bottomSheet");
+      const sheetHeader = document.getElementById("sheetHeader");
+      const darkModeToggle = document.getElementById("darkModeToggle");
+      const loadingIndicator = document.getElementById("loadingIndicator");
+      const infoContent = document.getElementById("infoContent"); // predictionPanel 내부에 위치
+      const addressInput = document.getElementById("addressInput");
+      const predictionPanel = document.getElementById("predictionPanel"); // 새로 추가된 예측 패널
+      const darkModeSwitchHandle = darkModeToggle.querySelector(
+        ".toggle-switch-handle"
+      );
+
+      // --- 테마 관리 ---
+      const applyTheme = () => {
+        const isDark =
+          localStorage.getItem("theme") === "dark" ||
+          (!("theme" in localStorage) &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.classList.toggle("dark", isDark);
+        darkModeToggle.classList.toggle("dark-mode-active", isDark); // 버튼 배경색 제어용 클래스 추가
+        // 스위치 핸들 위치 적용 (transition은 CSS에 있으므로 transform 클래스만 토글)
+        darkModeSwitchHandle.classList.toggle("translate-x-1", !isDark);
+        darkModeSwitchHandle.classList.toggle("translate-x-6", isDark);
+      };
+
+      darkModeToggle.addEventListener("click", () => {
+        const isDark = !document.documentElement.classList.contains("dark"); // 현재 상태의 반대로 설정
+        document.documentElement.classList.toggle("dark", isDark);
+        darkModeToggle.classList.toggle("dark-mode-active", isDark); // 버튼 배경색 제어용 클래스 추가
+        localStorage.setItem("theme", isDark ? "dark" : "light");
+        // 스위치 핸들 위치 토글 (transition은 CSS에 있으므로 transform 클래스만 토글)
+        darkModeSwitchHandle.classList.toggle("translate-x-1", !isDark);
+        darkModeSwitchHandle.classList.toggle("translate-x-6", isDark);
+      });
+
+      // --- 바텀 시트 관리 ---
+      let isSheetOpen = false;
+      const openSheet = () => {
+        if (!isSheetOpen) {
+          isSheetOpen = true;
+          bottomSheet.classList.add("is-open");
+        }
+      };
+      const closeSheet = () => {
+        if (isSheetOpen) {
+          isSheetOpen = false;
+          bottomSheet.classList.remove("is-open");
+        }
+      };
+      const toggleSheet = () => {
+        isSheetOpen ? closeSheet() : openSheet();
+      };
+      sheetHeader.addEventListener("click", toggleSheet);
+      // 지도 클릭 시 시트 닫기는 map 초기화 후 연결됨
+
+      // --- 지도 초기화 및 설정 ---
       const koreaBounds = L.latLngBounds([33, 124], [39.5, 132]);
       const map = L.map("map", {
-        zoomControl: false,
-        maxBounds: koreaBounds,
-        maxBoundsViscosity: 1.0,
-      }).setView([36.5, 127.5], 7);
+        zoomControl: false, // 기본 줌 컨트롤 비활성화 (커스텀 컨트롤 사용)
+        maxBounds: koreaBounds, // 한국 영역으로 지도 이동 제한
+        maxBoundsViscosity: 1.0, // 지도 경계에서 튕기지 않음
+      }).setView([36.5, 127.5], 7); // 초기 지도 뷰 (대한민국 중앙)
 
+      // 지도 클릭 이벤트: 시트 닫고 시뮬레이션 시작
+      map.on("click", (e) => {
+        closeSheet(); // 지도 클릭 시 바텀 시트 닫기 (발화 지점 선택 위함)
+        simulateSpread(e.latlng.lat, e.latlng.lng);
+      });
+
+      // OpenStreetMap 타일 레이어 추가
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         attribution: "&copy; OpenStreetMap contributors",
       }).addTo(map);
 
+      // 커스텀 줌 컨트롤 (좌측 하단)
       L.control.zoom({ position: "bottomleft" }).addTo(map);
 
+      // 확산 히트맵 레이어 그룹
       const spreadLayer = L.layerGroup().addTo(map);
-      const infoContent = document.getElementById("infoContent");
-      const addressInput = document.getElementById("addressInput");
-      let currentLat = null,
-        currentLon = null;
 
-      // [B] 범례 컨트롤 추가 (하단 오른쪽)
-      const legend = L.control({ position: "bottomright" });
+      // [B] 범례 컨트롤 추가 (좌측 하단)
+      const legend = L.control({ position: "bottomleft" }); // 위치 변경
       legend.onAdd = function () {
         const div = L.DomUtil.create("div", "legend");
         div.innerHTML = `
-                <b>확산 강도 (6단계)</b><br>
-                <i style="background: darkred"></i> ≥40%<br>
-                <i style="background: orangered"></i> 30~40%<br>
-                <i style="background: orange"></i> 20~30%<br>
-                <i style="background: yellow"></i> 10~20%<br>
-                <i style="background: lightyellow"></i> 5~10%<br>
-                <i style="background: whitesmoke"></i> 0~5%
-              `;
+          <b>확산 강도 (6단계)</b><br>
+          <i style="background: darkred"></i> ≥40%<br>
+          <i style="background: orangered"></i> 30~40%<br>
+          <i style="background: orange"></i> 20~30%<br>
+          <i style="background: yellow"></i> 10~20%<br>
+          <i style="background: lightyellow"></i> 5~10%<br>
+          <i style="background: whitesmoke"></i> 0~5%
+        `;
         return div;
       };
       legend.addTo(map);
 
-      // [C] 8방위 확률 계산 함수 (최소 5% 부여, 제곱 감쇠)
+      // --- 확산 예측 관련 핵심 함수들 ---
+
+      // [C] 8방위 확률 계산 함수 (바람 방향에 따라)
       function calcSpreadProbCustom8(windDir) {
-        const fireSpreadDir = (windDir + 180) % 360;
+        const fireSpreadDir = (windDir + 180) % 360; // 바람 반대 방향이 불이 확산되는 주 방향
         const sectors = {
           N: 0,
           NE: 45,
@@ -245,26 +493,26 @@
           W: 270,
           NW: 315,
         };
-        const BASELINE = 0.05;
+        const BASELINE = 0.05; // 최소 확산 확률
         let raw = {},
           total = 0;
         for (let dir in sectors) {
-          let diff = Math.abs(fireSpreadDir - sectors[dir]);
-          if (diff > 180) diff = 360 - diff;
-          let linear = 1 - diff / 90;
-          if (linear < 0) linear = 0;
-          let w = BASELINE + (1 - BASELINE) * Math.pow(linear, 2);
+          let diff = Math.abs(fireSpreadDir - sectors[dir]); // 확산 방향과 섹터 각도 차이
+          if (diff > 180) diff = 360 - diff; // 180도 이상 차이나면 반대편으로 계산
+          let linear = 1 - diff / 90; // 90도 차이 -> 0, 0도 차이 -> 1
+          if (linear < 0) linear = 0; // 90도 이상 차이는 0
+          let w = BASELINE + (1 - BASELINE) * Math.pow(linear, 2); // 제곱 감쇠
           raw[dir] = w;
           total += w;
         }
-        let prob = {};
+        let prob = {}; // 정규화된 확률
         for (let d in raw) {
           prob[d] = raw[d] / total;
         }
         return prob;
       }
 
-      // [D] 8방위 선형 보간 함수
+      // [D] 8방위 선형 보간 함수 (두 섹터 사이의 확률 보간)
       function getInterpolatedProb(angle, prob8) {
         const sectors = [
           { dir: "N", angle: 0 },
@@ -275,7 +523,7 @@
           { dir: "SW", angle: 225 },
           { dir: "W", angle: 270 },
           { dir: "NW", angle: 315 },
-          { dir: "N", angle: 360 },
+          { dir: "N", angle: 360 }, // 0도와 동일 (선형 보간을 위함)
         ];
         let lower, upper;
         for (let i = 0; i < sectors.length - 1; i++) {
@@ -285,175 +533,173 @@
             break;
           }
         }
-        if (!lower || !upper) return prob8["N"];
-        let t = (angle - lower.angle) / (upper.angle - lower.angle);
+        if (!lower || !upper) return prob8.N; // 예외 처리: 각도 범위 벗어날 경우 N 방향 확률 반환
+        let t = (angle - lower.angle) / (upper.angle - lower.angle); // 보간 가중치
         return prob8[lower.dir] * (1 - t) + prob8[upper.dir] * t;
       }
 
-      // [E] 셀 확률 계산 함수
-      // 클릭 지점 → 셀 방향에 따른 8방위 보간 확률과 거리 감쇠를 적용합니다.
-      function computeCellProbability(distanceKm, cellBearing, prob8) {
-        const angleProb = getInterpolatedProb(cellBearing, prob8);
-        const maxDist = 1 + 4 * angleProb; // 1km ~ 5km
-        if (distanceKm > maxDist) return 0;
-        return angleProb * Math.pow(1 - distanceKm / maxDist, 2);
+      // [E] 셀 확률 계산 함수 (클릭 지점 → 셀 방향에 따른 8방위 보간 확률과 거리 감쇠)
+      function computeCellProbability(dist, bearing, prob8) {
+        const p = getInterpolatedProb(bearing, prob8); // 방향별 확률
+        const maxD = 1 + 4 * p; // 최대 확산 거리를 방향별 확률에 따라 동적으로 조절 (1km ~ 5km)
+        if (dist > maxD) return 0; // 최대 확산 거리 밖은 0%
+        return p * Math.pow(1 - dist / maxD, 2); // 거리 감쇠 (제곱)
       }
 
-      // [F] 색상 보간 함수 (6단계)
-      function getHeatColor(prob) {
-        const pct = prob * 100;
-        if (pct >= 40) {
-          return "darkred";
-        } else if (pct >= 30) {
-          return "orangered";
-        } else if (pct >= 20) {
-          return "orange";
-        } else if (pct >= 10) {
-          return "yellow";
-        } else if (pct >= 5) {
-          return "lightyellow";
-        } else {
-          return "whitesmoke";
-        }
+      // [F] 색상 보간 함수 (확산 강도에 따른 6단계 색상)
+      function getHeatColor(p) {
+        const pct = p * 100;
+        if (pct >= 40) return "darkred";
+        else if (pct >= 30) return "orangered";
+        else if (pct >= 20) return "orange";
+        else if (pct >= 10) return "yellow";
+        else if (pct >= 5) return "lightyellow";
+        else return "whitesmoke";
       }
 
       // [G] 히트맵 생성 함수 (격자 기반, 8방위 확률 적용)
-      // 확률이 5% 이상인 셀마다, 경계선과 그림자 효과를 항상 적용합니다.
       function drawHeatmap(lat, lon, prob8) {
-        const maxDistanceKm = 5;
-        const centerLatRad = (lat * Math.PI) / 180;
-        const gridSize = 250; // 250m 격자
-        const dLat = gridSize / 111000;
-        const dLon = gridSize / (111000 * Math.cos(centerLatRad));
-        const latRange = maxDistanceKm / 111;
-        const lonRange = maxDistanceKm / (111 * Math.cos(centerLatRad));
-        const latMin = lat - latRange;
-        const latMax = lat + latRange;
-        const lonMin = lon - lonRange;
-        const lonMax = lon + lonRange;
+        spreadLayer.clearLayers(); // 기존 히트맵 및 마커 제거
 
-        for (let cellLat = latMin; cellLat <= latMax; cellLat += dLat) {
-          for (let cellLon = lonMin; cellLon <= lonMax; cellLon += dLon) {
-            let deltaLat = (cellLat - lat) * 111;
-            let deltaLon = (cellLon - lon) * 111 * Math.cos(centerLatRad);
-            let distance = Math.sqrt(deltaLat * deltaLat + deltaLon * deltaLon);
-            if (distance > maxDistanceKm) continue;
+        const maxD = 5; // 최대 확산 거리 (km)
+        const cLatR = (lat * Math.PI) / 180; // 중심 위도를 라디안으로 변환
+        const gridSize = 250; // 격자 크기 (미터)
+        const dLat = gridSize / 111000; // 위도 1도당 미터
+        const dLon = gridSize / (111000 * Math.cos(cLatR)); // 경도 1도당 미터
+        const latR = maxD / 111; // 위도 범위
+        const lonR = maxD / (111 * Math.cos(cLatR)); // 경도 범위
+        const latMin = lat - latR,
+          latMax = lat + latR;
+        const lonMin = lon - lonR,
+          lonMax = lon + lonR;
 
-            let bearing = (Math.atan2(deltaLon, deltaLat) * 180) / Math.PI;
-            if (bearing < 0) bearing += 360;
+        // 발화 지점 마커 추가 (히트맵 위에 표시되도록 먼저 추가)
+        L.marker([lat, lon]).addTo(spreadLayer);
 
-            const cellProb = computeCellProbability(distance, bearing, prob8);
-            if (cellProb < 0.05) continue;
+        for (let la = latMin; la <= latMax; la += dLat) {
+          for (let lo = lonMin; lo <= lonMax; lo += dLon) {
+            const deltaLat = (la - lat) * 111;
+            const deltaLon = (lo - lon) * 111 * Math.cos(cLatR);
+            const dist = Math.sqrt(deltaLat * deltaLat + deltaLon * deltaLon);
+            if (dist > maxD) continue; // 최대 거리 밖은 그리지 않음
 
-            const color = getHeatColor(cellProb);
-            // 모바일에서도 선명하게 보이도록 fillOpacity 조정 (0.2 ~ 0.9)
-            let fillOpacity = 0.3 + 0.7 * cellProb;
+            let br = (Math.atan2(deltaLon, deltaLat) * 180) / Math.PI; // 셀 방향 (중심점 기준)
+            if (br < 0) br += 360;
 
-            // 모든 셀에 경계선과 그림자 효과 적용 (weight: 1.5, borderColor = fillColor, className: "highProbShadow")
-            let borderWeight = 1.5;
-            let borderColor = color;
+            const cellP = computeCellProbability(dist, br, prob8);
+            if (cellP < 0.05) continue; // 확산 확률 5% 미만은 그리지 않음
 
-            let bounds = [
-              [cellLat, cellLon],
-              [cellLat + dLat, cellLon + dLon],
-            ];
-            let rect = L.rectangle(bounds, {
-              color: borderColor,
-              weight: borderWeight,
-              fillColor: color,
-              fillOpacity: fillOpacity,
-              className: "highProbShadow",
-            }).addTo(spreadLayer);
-            // 터치/클릭 시 팝업으로 확산 강도(%) 표시
-            rect.bindPopup((cellProb * 100).toFixed(1) + "%");
-            rect.on("click", function () {
-              rect.openPopup();
-            });
+            const color = getHeatColor(cellP);
+            const opacity = 0.3 + 0.7 * cellP; // 확률에 따라 투명도 조절
+
+            const rect = L.rectangle(
+              [
+                [la, lo],
+                [la + dLat, lo + dLon],
+              ],
+              {
+                color, // 경계선 색상
+                weight: 1.5, // 경계선 두께
+                fillColor: color, // 채우기 색상
+                fillOpacity: opacity, // 채우기 투명도
+                className: "highProbShadow", // 그림자 효과 클래스
+              }
+            ).addTo(spreadLayer);
+            rect.bindPopup((cellP * 100).toFixed(1) + "%"); // 팝업으로 확산 강도 표시
           }
         }
       }
 
-      // [H] destinationPoint 함수 (필요시 사용)
-      function destinationPoint(lat, lon, bearingDeg, distanceKm) {
-        const R = 6371;
-        const rad = Math.PI / 180;
-        const latRad = lat * rad;
-        const lonRad = lon * rad;
-        const bearing = bearingDeg * rad;
-        const dOverR = distanceKm / R;
-        const newLat = Math.asin(
-          Math.sin(latRad) * Math.cos(dOverR) +
-            Math.cos(latRad) * Math.sin(dOverR) * Math.cos(bearing)
-        );
-        const newLon =
-          lonRad +
-          Math.atan2(
-            Math.sin(bearing) * Math.sin(dOverR) * Math.cos(latRad),
-            Math.cos(dOverR) - Math.sin(latRad) * Math.sin(newLat)
-          );
-        return [newLat / rad, newLon / rad];
-      }
-
-      // [I] infoBox에 4방위 확산률 정보 표시 함수 (N, E, S, W)
+      // [I] 예측 결과 패널에 표시할 HTML 내용 생성 함수 (Top 2 방향 강조 및 화살표 아이콘 추가)
       function buildWindInfoText(windDir, windSpd, prob8) {
-        const nPct = (prob8["N"] * 100).toFixed(1);
-        const ePct = (prob8["E"] * 100).toFixed(1);
-        const sPct = (prob8["S"] * 100).toFixed(1);
-        const wPct = (prob8["W"] * 100).toFixed(1);
-        return `풍향: ${windDir}° / 풍속: ${windSpd} km/h
-      N: ${nPct}%, E: ${ePct}%,
-      S: ${sPct}%, W: ${wPct}%`;
+        // 확산 확률이 높은 순으로 정렬하여 Top 2 방향 찾기
+        const sortedDirections = Object.entries(prob8)
+          .sort(([, probA], [, probB]) => probB - probA)
+          .slice(0, 2) // 상위 2개만 선택
+          .map(([dir]) => dir); // 방향 이름만 추출
+
+        // 각 방향에 해당하는 화살표 아이콘 (유니코드 사용)
+        const dirArrows = {
+          N: "&#8593;", // 북
+          NE: "&#8599;", // 북동
+          E: "&#8594;", // 동
+          SE: "&#8600;", // 남동
+          S: "&#8595;", // 남
+          SW: "&#8601;", // 남서
+          W: "&#8592;", // 서
+          NW: "&#8598;", // 북서
+        };
+
+        const currentWindDirectionText = getWindDirectionText(windDir);
+
+        return `
+          <div class="info-row">
+              <span class="info-label">풍향 / 풍속</span>
+              <span class="info-value">${currentWindDirectionText} (${windDir}°) / ${windSpd} km/h</span>
+          </div>
+          <div class="direction-grid">
+              ${["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+                .map((dir) => {
+                  const isHighlight = sortedDirections.includes(dir);
+                  return `
+                <div class="direction-item">
+                    <p class="font-bold">
+                        ${dir} <span class="wind-arrow">${dirArrows[dir]}</span>
+                    </p>
+                    <p class="percentage ${isHighlight ? "highlight" : ""}">${(
+                    prob8[dir] * 100
+                  ).toFixed(1)}%</p>
+                </div>
+              `;
+                })
+                .join("")}
+          </div>
+        `;
+      }
+      // 풍향 각도를 텍스트로 변환하는 헬퍼 함수
+      function getWindDirectionText(degree) {
+        if (degree > 337.5 || degree <= 22.5) return "북";
+        if (degree > 22.5 && degree <= 67.5) return "북동";
+        if (degree > 67.5 && degree <= 112.5) return "동";
+        if (degree > 112.5 && degree <= 157.5) return "남동";
+        if (degree > 157.5 && degree <= 202.5) return "남";
+        if (degree > 202.5 && degree <= 247.5) return "남서";
+        if (degree > 247.5 && degree <= 292.5) return "서";
+        if (degree > 292.5 && degree <= 337.5) return "북서";
+        return "";
       }
 
       // [NEW] 4개의 최근접 지점을 이용한 보간 함수 (Inverse Distance Weighting)
       function interpolateProb(lat, lon) {
-        // 1. 각 데이터 지점까지의 거리를 계산합니다.
-        const distances = modelPredictions.map(item => {
-            const dist = Math.sqrt(Math.pow(lat - item.lat, 2) + Math.pow(lon - item.lon, 2));
-            return { ...item, distance: dist };
-        });
-
+        // 1. 각 데이터 지점까지의 유클리드 거리를 계산합니다. (Math.hypot은 (dx, dy)의 대각선 길이 계산)
+        const distances = modelPredictions.map((item) => ({
+          ...item,
+          distance: Math.hypot(lat - item.lat, lon - item.lon),
+        }));
         // 2. 만약 클릭한 지점이 데이터 지점과 정확히 일치하면, 해당 지점의 값을 바로 반환합니다.
-        const exactMatch = distances.find(item => item.distance === 0);
-        if (exactMatch) {
-            return exactMatch.predicted_prob;
-        }
-
+        const exactMatch = distances.find((item) => item.distance === 0);
+        if (exactMatch) return exactMatch.predicted_prob;
         // 3. 거리가 가까운 순으로 정렬하여 상위 4개를 선택합니다.
         distances.sort((a, b) => a.distance - b.distance);
         const nearestNeighbors = distances.slice(0, 4);
-
         // 4. 역거리 가중법(IDW)을 사용하여 8방향 확률을 각각 보간합니다.
         const interpolatedProbs = {};
-        const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+        const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
         let totalWeight = 0;
-
-        // 가중치의 합계를 먼저 계산합니다. (가중치 = 1 / 거리)
-        nearestNeighbors.forEach(neighbor => {
-            // 거리가 0에 매우 가까운 경우 무한대가 되는 것을 방지하기 위해 작은 값을 더합니다.
-            totalWeight += 1 / (neighbor.distance + 0.00001);
+        // 가중치 (1 / 거리)의 총합을 먼저 계산 (거리가 0에 매우 가까운 경우 무한대가 되는 것을 방지하기 위해 작은 값을 더함)
+        nearestNeighbors.forEach((neighbor) => {
+          totalWeight += 1 / (neighbor.distance + 1e-5);
         });
-
-        if (totalWeight === 0) return null; // 예외 처리
-
-        directions.forEach(dir => {
-            let weightedSum = 0;
-            nearestNeighbors.forEach(neighbor => {
-                const weight = (1 / (neighbor.distance + 0.00001)) / totalWeight;
-                weightedSum += neighbor.predicted_prob[dir] * weight;
-            });
-            interpolatedProbs[dir] = weightedSum;
+        if (totalWeight === 0) return null; // 예외 처리 (모든 거리가 너무 멀거나 데이터 없음)
+        directions.forEach((dir) => {
+          let weightedSum = 0;
+          nearestNeighbors.forEach((neighbor) => {
+            const weight = 1 / (neighbor.distance + 1e-5) / totalWeight; // 정규화된 가중치
+            weightedSum += neighbor.predicted_prob[dir] * weight;
+          });
+          interpolatedProbs[dir] = weightedSum;
         });
-
         return interpolatedProbs;
-      }
-
-      // [J] 지도 클릭 이벤트
-      map.on("click", (e) => {
-        simulateSpread(e.latlng.lat, e.latlng.lng);
-      });
-      function isInKorea(lat, lon) {
-        return lat >= 33 && lat <= 39.5 && lon >= 124 && lon <= 132;
       }
 
       // [K] 주소 검색 함수
@@ -464,31 +710,25 @@
           return;
         }
         try {
-          // 현재 지도 경계를 가져와 검색 우선순위 지역으로 활용
           const bounds = map.getBounds();
           const viewbox = `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`;
-
-          // bounded=1 옵션을 제거하여 검색 유연성 확보
           const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
             address
           )}&countrycodes=kr&viewbox=${viewbox}`;
-          
           const res = await fetch(url);
           const data = await res.json();
-
           if (!data.length) {
-            alert("해당 주소를 찾을 수 없습니다. 좀 더 상세한 주소를 입력해 보세요.");
+            alert(
+              "해당 주소를 찾을 수 없습니다. 좀 더 상세한 주소를 입력해 보세요."
+            );
             return;
           }
-          const lat = parseFloat(data[0].lat);
-          const lon = parseFloat(data[0].lon);
-          
-          if (!isInKorea(lat, lon)) {
-            alert("대한민국 내 주소만 검색할 수 있습니다.");
-            return;
-          }
-          map.setView([lat, lon], 13);
-          simulateSpread(lat, lon);
+          const lat = parseFloat(data[0].lat),
+            lon = parseFloat(data[0].lon);
+          if (!isInKorea(lat, lon))
+            return alert("대한민국 내 주소만 검색 가능합니다.");
+          map.setView([lat, lon], 13); // 검색된 위치로 지도 이동 (줌 레벨 13)
+          simulateSpread(lat, lon); // 시뮬레이션 시작
         } catch (err) {
           console.error("주소 검색 오류:", err);
           alert("주소 검색 중 문제가 발생했습니다.");
@@ -496,30 +736,26 @@
       }
 
       // [L] 현재 위치 버튼 함수
-      async function handleCurrentLocation() {
-        if (!navigator.geolocation) {
-          alert("이 브라우저는 현재 위치를 지원하지 않습니다.");
-          return;
-        }
+      function handleCurrentLocation() {
+        if (!navigator.geolocation)
+          return alert("이 브라우저는 현재 위치를 지원하지 않습니다.");
         navigator.geolocation.getCurrentPosition(
           async (pos) => {
-            const lat = pos.coords.latitude;
-            const lon = pos.coords.longitude;
-            if (!isInKorea(lat, lon)) {
-              alert("현재 위치가 대한민국 외부로 감지되었습니다.");
-              return;
-            }
+            const lat = pos.coords.latitude,
+              lon = pos.coords.longitude;
+            if (!isInKorea(lat, lon))
+              return alert("현재 위치가 대한민국 외부로 감지되었습니다.");
             try {
               const revUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`;
               const revRes = await fetch(revUrl);
               const revData = await revRes.json();
-              addressInput.value = revData.display_name || "내 위치";
+              addressInput.value = revData.display_name || "내 위치"; // 주소 입력창 업데이트
             } catch (e) {
               console.error("역지오코딩 실패:", e);
               addressInput.value = "내 위치(주소 확인 실패)";
             }
-            map.setView([lat, lon], 13);
-            simulateSpread(lat, lon);
+            map.setView([lat, lon], 13); // 현재 위치로 지도 이동
+            simulateSpread(lat, lon); // 시뮬레이션 시작
           },
           (err) => {
             console.error("Geolocation error:", err);
@@ -528,70 +764,72 @@
         );
       }
 
-      // [M] 새로고침 버튼 함수
-      function handleRefresh() {
-        if (currentLat === null || currentLon === null) {
-          alert("아직 위치가 지정되지 않았습니다.");
-          return;
-        }
-        simulateSpread(currentLat, currentLon);
-      }
-
       // [N] 바람 데이터 조회 및 시뮬레이션 함수
       async function simulateSpread(lat, lon) {
-        // ▼▼▼ 로딩 화면 보이기 ▼▼▼
         loadingIndicator.textContent = "분석 중...";
-        loadingIndicator.style.display = "flex";
+        loadingIndicator.style.display = "flex"; // 로딩 인디케이터 표시
+        closeSheet(); // 시뮬레이션 시작 시 바텀 시트 닫기 (지도 영역 확보)
 
-        currentLat = lat;
-        currentLon = lon;
-        spreadLayer.clearLayers();
-        L.marker([lat, lon]).addTo(spreadLayer);
-        
+        currentLat = lat; // 현재 위도 저장
+        currentLon = lon; // 현재 경도 저장
+
         try {
-            const revUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`;
-            const revRes = await fetch(revUrl);
-            const revData = await revRes.json();
-            addressInput.value = revData.display_name || "내 위치";
+          // 선택된 지점의 주소 역지오코딩 (입력창 업데이트용)
+          const rev = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`
+          );
+          const rd = await rev.json();
+          addressInput.value =
+            rd.display_name || `위도:${lat.toFixed(4)},경도:${lon.toFixed(4)}`;
         } catch (e) {
-            console.error("역지오코딩 실패:", e);
+          console.error("역지오코딩 실패:", e);
         }
-        
-        const apiUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`;
-        
+
         try {
-            const res = await fetch(apiUrl);
-            if (!res.ok) throw new Error("Open-Meteo API 응답 오류");
-            const data = await res.json();
-            if (!data.current_weather) throw new Error("current_weather 없음");
+          // Open-Meteo API에서 현재 날씨(바람) 정보 가져오기
+          const res = await fetch(
+            `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`
+          );
+          if (!res.ok) throw new Error("Open-Meteo API 응답 오류");
+          const d = await res.json();
+          if (!d.current_weather)
+            throw new Error("current_weather 데이터가 없습니다.");
 
-            const windDir = data.current_weather.winddirection;
-            const windSpd = data.current_weather.windspeed;
-            const probFromWind = calcSpreadProbCustom8(windDir);
-            const probFromModel = interpolateProb(lat, lon);
-            const prob8 = probFromModel
-                ? blendSpreadProb(probFromWind, probFromModel, 0.7)
-                : probFromWind;
+          const wf = d.current_weather; // 바람 정보
+          const probFromWind = calcSpreadProbCustom8(wf.winddirection); // 바람 기반 확산 확률
+          const probFromModel = interpolateProb(lat, lon); // 학습 모델 기반 확산 확률 (보간)
+          // 바람 기반 확률 70%, 모델 기반 확률 30%로 블렌딩
+          const finalProb8 = probFromModel
+            ? blendSpreadProb(probFromWind, probFromModel, 0.7)
+            : probFromWind; // 모델 데이터 없으면 바람 기반만 사용
 
-            infoContent.textContent = buildWindInfoText(windDir, windSpd, prob8);
-            drawHeatmap(lat, lon, prob8);
-        } catch (err) {
-            console.error("시뮬레이션 오류:", err);
-            infoContent.textContent = "바람 정보를 불러오지 못했습니다.";
+          infoContent.innerHTML = buildWindInfoText(
+            // 예측 결과 패널에 내용 업데이트
+            wf.winddirection,
+            wf.windspeed,
+            finalProb8
+          );
+          drawHeatmap(lat, lon, finalProb8); // 지도에 히트맵 그리기
+          predictionPanel.classList.remove("hidden"); // 예측 결과 패널 표시 (항상 보이도록)
+        } catch (e) {
+          console.error("시뮬레이션 오류:", e);
+          infoContent.innerHTML =
+            "<p class='text-red-500'>바람 정보를 불러오지 못했습니다.</p>";
+          predictionPanel.classList.remove("hidden"); // 오류 메시지라도 보이도록 패널 표시
         } finally {
-            // ▼▼▼ 로딩 화면 숨기기 ▼▼▼
-            loadingIndicator.style.display = "none";
+          loadingIndicator.style.display = "none"; // 로딩 인디케이터 숨김
         }
       }
 
-      // [O] destinationPoint 함수 (필요시 사용)
+      // [O] destinationPoint 함수 (현재 사용되지 않지만 유틸리티 함수로 유지)
       function destinationPoint(lat, lon, bearingDeg, distanceKm) {
-        const R = 6371;
-        const rad = Math.PI / 180;
+        const R = 6371; // 지구 평균 반경 (킬로미터)
+        const rad = Math.PI / 180; // 도 단위를 라디안으로 변환
         const latRad = lat * rad;
         const lonRad = lon * rad;
         const bearing = bearingDeg * rad;
         const dOverR = distanceKm / R;
+
         const newLat = Math.asin(
           Math.sin(latRad) * Math.cos(dOverR) +
             Math.cos(latRad) * Math.sin(dOverR) * Math.cos(bearing)
@@ -602,23 +840,67 @@
             Math.sin(bearing) * Math.sin(dOverR) * Math.cos(latRad),
             Math.cos(dOverR) - Math.sin(latRad) * Math.sin(newLat)
           );
-        return [newLat / rad, newLon / rad];
+        return [newLat / rad, newLon / rad]; // 위경도를 다시 도로 변환하여 반환
       }
 
-      // [P] 풍향 화살표 제거 (요청에 따라 호출하지 않음)
-
-      // [Q] 페이지 로드 시 현재 위치로 시작
-      window.onload = function () {
-        handleCurrentLocation();
-      };
-
-      function blendSpreadProb(W, M, alpha = 0.7) {
+      // [P] 확산 확률 블렌딩 함수 (바람 예측과 모델 예측을 섞음)
+      function blendSpreadProb(windProb, modelProb, alpha = 0.7) {
         const blended = {};
-        for (const dir of Object.keys(W)) {
-          blended[dir] = alpha * W[dir] + (1 - alpha) * M[dir];
+        for (const dir of Object.keys(windProb)) {
+          blended[dir] = alpha * windProb[dir] + (1 - alpha) * modelProb[dir];
         }
         return blended;
       }
+
+      // [Q] 대한민국 내 좌표 확인 함수 (지도 범위 제한용)
+      function isInKorea(lat, lon) {
+        return lat >= 33 && lat <= 39.5 && lon >= 124 && lon <= 132;
+      }
+
+      // --- 초기 데이터 로드 및 앱 시작 ---
+      // window.onload: 페이지의 모든 콘텐츠(HTML, CSS, 이미지 등)가 로드된 후 실행
+      window.onload = function () {
+        applyTheme(); // 페이지 로드 시 테마 적용 (토글 위치 초기화 포함)
+
+        // predicted_spread.json 파일 로드
+        fetch("./predicted_spread.json")
+          .then((res) => {
+            if (!res.ok) {
+              console.error(
+                "JSON 파일을 찾을 수 없습니다. HTTP 상태 코드:",
+                res.status
+              );
+              throw new Error(
+                `'./predicted_spread.json' 파일을 찾을 수 없거나 접근할 수 없습니다. HTTP 상태: ${res.status}`
+              );
+            }
+            return res.json();
+          })
+          .then((data) => {
+            modelPredictions = data;
+            console.log(
+              "✅ 모델 예측 데이터 로드 완료:",
+              modelPredictions.length,
+              "개 항목"
+            );
+            // 데이터가 비어있거나 형식이 잘못된 경우 경고
+            if (modelPredictions.length === 0) {
+              console.warn(
+                "predicted_spread.json 파일이 비어있거나 데이터가 없습니다."
+              );
+            } else {
+              console.log("첫 번째 예측 항목 (확인용):", modelPredictions[0]);
+            }
+            loadingIndicator.style.display = "none"; // 데이터 로드 후 로딩 숨김
+            handleCurrentLocation(); // 초기 위치로 시뮬레이션 시작
+          })
+          .catch((err) => {
+            console.error("초기 데이터 로드 실패:", err);
+            // 사용자에게 오류 메시지 표시
+            loadingIndicator.textContent = `초기 데이터 로드 실패: ${err.message}. 파일 경로 또는 내용을 확인해 주세요.`;
+            loadingIndicator.style.display = "flex"; // 오류 메시지를 볼 수 있도록 로딩 인디케이터 표시 유지
+          });
+      };
     </script>
   </body>
 </html>
